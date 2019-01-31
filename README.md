@@ -2,21 +2,29 @@
 
 1. Perform database setup and get dependencies:
 
-    ./script/setup.sh
+```
+./script/setup.sh
+```
 
 2. Start message consumer process:
 
-    ./start-service.sh
+```
+./start-service.sh
+```
 
 3. Start one of message producers:
 
-    ./script/produce-messages_1_long_transactions.sh
-    ./script/produce-messages_2_batches_in_contention.sh
-    ./script/produce-messages_3_message_in_contention.sh
+```
+./script/produce-messages_1_long_transactions.sh
+./script/produce-messages_2_batches_in_contention.sh
+./script/produce-messages_3_message_in_contention.sh
+```
 
 4. Verify if number of Deposit messages equals number of Deposited. If not, you've experienced race condition in [get\_category\_messages](https://github.com/eventide-project/message-store-postgres-database/blob/1aa76c8b78b438ba439ff0f7db9cb2bc3e6ce1d9/database/functions/get-category-messages.sql#L26)
 
-    psql message_store < check_messages.sql
+```
+psql message_store < check_messages.sql
+```
 
 # Reproduction on video
 
