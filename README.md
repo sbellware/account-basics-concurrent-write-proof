@@ -1,242 +1,38 @@
-# A Basic Microservice Example Using Pub/Sub and Event Sourcing
+# Reproduction steps
 
-This example provides a one-file implementation of the various parts of an autonomous, evented service, including a handler, events, commands, entities, entity snapshotting, a projection, a consumer, consumer offset recording, and the service startup script.
+1. Perform database setup and get dependencies:
 
-The [service.rb](https://github.com/eventide-examples/account-basics/blob/master/service.rb) file has all the things.
+    ./script/setup.sh
 
-To start the service, open a terminal and run `start-service.sh`.
+2. Start message consumer process:
 
-Once the service is running, it waits for new messages.
+    ./start-service.sh
 
-To feed the service new messages, open a terminal and run `script/produce-messages.sh`.
+3. Start one of message producers:
 
-This is example is built using the [Eventide](http://docs.eventide-project.org/) toolkit.
+    ./script/produce-messages_1_long_transactions.sh
+    ./script/produce-messages_2_batches_in_contention.sh
+    ./script/produce-messages_3_message_in_contention.sh
 
-## Setup
+4. Verify if number of Deposit messages equals number of Deposited. If not, you've experienced race condition in [get\_category\_messages](https://github.com/eventide-project/message-store-postgres-database/blob/1aa76c8b78b438ba439ff0f7db9cb2bc3e6ce1d9/database/functions/get-category-messages.sql#L26)
 
-Run `script/setup.sh` to install the dependencies and create the message store Postgres database.
+    psql message_store < check_messages.sql
 
-``` bash
-script/setup.sh
-```
+# Reproduction on video
 
-Dependencies are installed locally in the `gems` directory.
+The example illustrating long transactions (highest chance of race condition):
+https://v.usetapes.com/fFFLdpUS2t
 
-For more information on the message store database, see: [http://docs.eventide-project.org/user-guide/message-store/install.html](http://docs.eventide-project.org/user-guide/message-store/install.html)
+The example illustraing uneven but short transactions (batches of 1-2 messages):
+https://v.usetapes.com/mipFBvNo8F
+https://v.usetapes.com/bAzuKpJQYr
 
-## The Code
+The example illustrating most typical usage under high load:
+https://v.usetapes.com/gYxbsabA3D
 
-The service is a rudimentary implementation of accounts, including deposits, withdrawals, and insufficient funds handling.
 
-``` ruby
-# Deposit command message
-# Send to the account service to effect a deposit
-class Deposit
-  include Messaging::Message
+# The problem exposed by the experiments:
 
-  attribute :account_id, String
-  attribute :amount, Numeric
-  attribute :time, String
-end
+![transactions_and_ids](https://user-images.githubusercontent.com/65587/30241715-2f09723e-9589-11e7-9f41-9868f6e794e1.png)
 
-# Deposited event message
-# Event is written by the handler when a deposit is successfully processed
-class Deposited
-  include Messaging::Message
-
-  attribute :account_id, String
-  attribute :amount, Numeric
-  attribute :time, String
-  attribute :processed_time, String
-end
-
-# Withdraw command message
-# Send to the account service to effect a withdrawal
-class Withdraw
-  include Messaging::Message
-
-  attribute :account_id, String
-  attribute :amount, Numeric
-  attribute :time, String
-end
-
-# Withdrawn event message
-# Event is written by the handler when a withdrawal is successfully processed
-class Withdrawn
-  include Messaging::Message
-
-  attribute :account_id, String
-  attribute :amount, Numeric
-  attribute :time, String
-  attribute :processed_time, String
-end
-
-# WithdrawalRejected event message
-# Event is written by the handler when a withdrawal cannot be successfully
-# processed, as when there are insufficient funds
-class WithdrawalRejected
-  include Messaging::Message
-
-  attribute :account_id, String
-  attribute :amount, Numeric
-  attribute :time, String
-end
-
-# Account entity
-# The account service's model object
-class Account
-  include Schema::DataStructure
-
-  attribute :id, String
-  attribute :balance, Numeric, default: 0
-
-  def deposit(amount)
-    self.balance += amount
-  end
-
-  def withdraw(amount)
-    self.balance -= amount
-  end
-
-  def sufficient_funds?(amount)
-    balance >= amount
-  end
-end
-
-# Account transformation to and from JSON for entity snapshotting
-class Account
-  module Transform
-    # When reading: Convert hash to Account
-    def self.instance(raw_data)
-      Account.build(raw_data)
-    end
-
-    # When writing: Convert Account to hash
-    def self.raw_data(instance)
-      instance.to_h
-    end
-  end
-end
-
-# Account entity projection
-# Applies account events to an account entity
-class Projection
-  include EntityProjection
-
-  entity_name :account
-
-  apply Deposited do |deposited|
-    amount = deposited.amount
-    account.deposit(amount)
-    account.id = deposited.account_id
-  end
-
-  apply Withdrawn do |withdrawn|
-    amount = withdrawn.amount
-    account.withdraw(amount)
-    account.id = withdrawn.account_id
-  end
-end
-
-# Account entity store
-# Projects an account entity and keeps a cache of the result
-class Store
-  include EntityStore
-
-  category :account
-  entity Account
-  projection Projection
-  reader MessageStore::Postgres::Read
-  snapshot EntitySnapshot::Postgres, interval: 5
-end
-
-# Account command handler with withdrawal implementation
-# Business logic for processing a withdrawal
-class Handler
-  include Messaging::Handle
-  include Messaging::StreamName
-
-  dependency :write, Messaging::Postgres::Write
-  dependency :clock, Clock::UTC
-  dependency :store, Store
-
-  def configure
-    Messaging::Postgres::Write.configure(self)
-    Clock::UTC.configure(self)
-    Store.configure(self)
-  end
-
-  category :account
-
-  handle Deposit do |deposit|
-    account_id = deposit.account_id
-
-    time = clock.iso8601
-
-    deposited = Deposited.follow(deposit)
-    deposited.processed_time = time
-
-    stream_name = stream_name(account_id)
-
-    write.(deposited, stream_name)
-  end
-
-  handle Withdraw do |withdraw|
-    account_id = withdraw.account_id
-
-    account = store.fetch(account_id)
-
-    time = clock.iso8601
-
-    stream_name = stream_name(account_id)
-
-    unless account.sufficient_funds?(withdraw.amount)
-      withdrawal_rejected = WithdrawalRejected.follow(withdraw)
-      withdrawal_rejected.time = time
-
-      write.(withdrawal_rejected, stream_name)
-
-      return
-    end
-
-    withdrawn = Withdrawn.follow(withdraw)
-    withdrawn.processed_time = time
-
-    write.(withdrawn, stream_name)
-  end
-end
-
-# The consumer dispatches in-bound messages to handlers
-# Consumers have an internal reader that reads messages from a single stream
-# Consumers can have many handlers
-class AccountConsumer
-  include Consumer::Postgres
-
-  handler Handler
-end
-
-# The "Component" module maps consumers to their streams
-# Until this point, handlers have no knowledge of which streams they process
-# Starting the consumers starts the stream readers and gets messages
-# flowing into the consumer's handlers
-module Component
-  def self.call
-    account_command_stream_name = 'account:command'
-    AccountConsumer.start(account_command_stream_name)
-  end
-end
-
-# ComponentHost is the runnable part of the service
-# Register the component module with the component host, then start the
-# component and messages sent to its streams are dispatched to the handlers
-component_name = 'account-service'
-ComponentHost.start(component_name) do |host|
-  host.register(Component)
-end
-```
-
-## Production Readiness
-
-This basic introduction doesn't demonstrate protections for idempotence and concurrency. Without these considerations, this service isn't production-ready.
-
-For an example that is more representative of production-ready evented autonomous service implementation, including testing, client library implementation, and collaboration with external services, see: [https://github.com/eventide-examples/account-component](https://github.com/eventide-examples/account-component).
+In such case we can get IDs of events 0 and 2, but skip reading uncommitted event nr 1.
