@@ -23,7 +23,7 @@ end
 
 writer = ->(idx) do
   Thread.new do
-    batch = ((idx + 1) % 2).times.map { message[idx] }
+    batch = ((idx % 2) + 1).times.map { message[idx] }
     1_000.times do
       Messaging::Postgres::Write.(batch, stream_name[idx])
     end
