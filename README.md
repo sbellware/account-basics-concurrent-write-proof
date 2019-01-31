@@ -29,14 +29,14 @@ psql message_store < check_messages.sql
 # Reproduction on video
 
 The example illustrating long transactions (highest chance of race condition):
-https://v.usetapes.com/fFFLdpUS2t
+- https://v.usetapes.com/fFFLdpUS2t
 
 The example illustraing uneven but short transactions (batches of 1-2 messages):
-https://v.usetapes.com/mipFBvNo8F
-https://v.usetapes.com/bAzuKpJQYr
+- https://v.usetapes.com/mipFBvNo8F
+- https://v.usetapes.com/bAzuKpJQYr
 
 The example illustrating most typical usage under high load:
-https://v.usetapes.com/gYxbsabA3D
+- https://v.usetapes.com/gYxbsabA3D
 
 
 # The problem exposed by the experiments:
